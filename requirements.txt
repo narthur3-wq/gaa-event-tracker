@@ -1,0 +1,6 @@
+streamlit>=1.34
+plotly>=5.23
+pandas>=2.2
+numpy>=1.26
+streamlit-plotly-events>=0.0.6
+kaleido>=0.2
