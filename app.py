@@ -1,4 +1,4 @@
-# app.py — GAA Event Tracker (full version)
+# app.py — GAA Event Tracker (updated: stronger click mesh, no row limit)
 
 import io
 import re
@@ -94,7 +94,6 @@ def insert_event(conn, **evt) -> int:
     conn.commit(); return cur.lastrowid
 
 # ------------------- Pitch helpers (GAA look + click mesh) -------------------
-# Pick midpoints of allowed sizes; we only use these to scale features visually
 PITCH_LEN_M = 140.0   # 130–145 m
 PITCH_WID_M = 85.0    # 80–90  m
 
@@ -177,13 +176,15 @@ def make_gaa_pitch() -> go.Figure:
     return fig
 
 def add_click_mesh(fig: go.Figure, step: float = 2.0) -> None:
-    """Invisible scatter grid so clicks register anywhere."""
+    """Invisible scatter grid so clicks register anywhere.
+    Uses square markers + slight opacity for reliable hit-testing.
+    """
     vs = np.arange(0, 100 + 1e-9, step)
     xx, yy = np.meshgrid(vs, vs)
     fig.add_trace(go.Scatter(
         x=xx.ravel(), y=yy.ravel(),
         mode="markers",
-        marker=dict(size=18, opacity=0.001),
+        marker=dict(size=26, symbol="square", opacity=0.03),
         hoverinfo="skip", showlegend=False, name="_clickmesh",
     ))
 
@@ -227,7 +228,7 @@ st.subheader("Pitch (click to add path)")
 fig = make_gaa_pitch()
 add_click_mesh(fig, step=2.0)  # makes the whole canvas clickable
 
-# IMPORTANT: unique key for the event listener
+# Unique key for event listener
 clicks = plotly_events(fig, click_event=True, select_event=False, hover_event=False, key="gaa_pitch")
 
 # Keep two points (start, end) in session
@@ -305,7 +306,7 @@ if st.button("Save event", key="save_event"):
 with get_conn(DB_PATH_DEFAULT) as c:
     df = pd.read_sql_query(
         "SELECT event_id, half, minute, second, event_type, outcome, outcome_class, start_x, start_y, end_x, end_y "
-        "FROM event WHERE match_id=? ORDER BY event_id DESC LIMIT 150",
+        "FROM event WHERE match_id=? ORDER BY event_id DESC",
         c, params=(ids["match"],)
     )
 
