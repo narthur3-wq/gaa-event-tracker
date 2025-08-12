@@ -1,3 +1,5 @@
+# app.py — GAA Event Tracker (full version)
+
 import io
 import re
 import sqlite3
@@ -91,41 +93,99 @@ def insert_event(conn, **evt) -> int:
     cur.execute(f"INSERT INTO event({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})", values)
     conn.commit(); return cur.lastrowid
 
-# ------------------- Pitch (GAA style) -------------------
-def make_gaa_pitch() -> go.Figure:
-    """
-    Draw a GAA-style pitch in a 0..100 x 0..100 space.
-    Guides:
-      - halfway line
-      - 13m, 20m, 45m lines from BOTH ends, scaled to percentages of a 145m pitch
-    """
-    # Scale real marks to percentage on a 145m length
-    def pct(metres: float) -> float:  # convert metres along pitch to 0..100
-        return 100.0 * metres / 145.0
+# ------------------- Pitch helpers (GAA look + click mesh) -------------------
+# Pick midpoints of allowed sizes; we only use these to scale features visually
+PITCH_LEN_M = 140.0   # 130–145 m
+PITCH_WID_M = 85.0    # 80–90  m
 
-    marks = [pct(13), pct(20), pct(45)]
+def _mx(m: float) -> float:  # metres -> % along length (x axis 0..100)
+    return 100.0 * float(m) / PITCH_LEN_M
+
+def _my(m: float) -> float:  # metres -> % along width  (y axis 0..100)
+    return 100.0 * float(m) / PITCH_WID_M
+
+def make_gaa_pitch() -> go.Figure:
     fig = go.Figure()
 
-    # Outer rectangle
-    fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100, line=dict(color="#2563eb"))
+    # Grass (with mowing stripes)
+    fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100,
+                  line=dict(color="#14532d", width=2), fillcolor="#d1fae5")
+    for v in range(10, 100, 10):
+        fig.add_shape(type="rect", x0=v-10, y0=0, x1=v, y1=100, line=dict(width=0),
+                      fillcolor="#ecfdf5" if (v//10) % 2 else "#d1fae5", layer="below")
 
     # Halfway
-    fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="#94a3b8", width=2))
+    fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="#64748b", width=2))
 
-    # End-zone guides (13, 20, 45) on both ends
-    for m in marks:
-        fig.add_shape(type="line", x0=m, y0=0, x1=m, y1=100, line=dict(color="#e5e7eb"))
-        fig.add_shape(type="line", x0=100 - m, y0=0, x1=100 - m, y1=100, line=dict(color="#e5e7eb"))
+    # 13 / 20 / 45 from both ends
+    for m in (13, 20, 45):
+        x = _mx(m)
+        fig.add_shape(type="line", x0=x, y0=0, x1=x, y1=100, line=dict(color="#94a3b8"))
+        fig.add_shape(type="line", x0=100.0 - x, y0=0, x1=100.0 - x, y1=100, line=dict(color="#94a3b8"))
 
-    # Light grid every 10 for orientation
-    for v in range(10, 100, 10):
-        fig.add_shape(type="line", x0=v, y0=0, x1=v, y1=100, line=dict(color="#f3f4f6"))
-        fig.add_shape(type="line", x0=0, y0=v, x1=100, y1=v, line=dict(color="#f3f4f6"))
+    # Centre circle (~10 m radius)
+    r_centre_m = 10.0
+    t = np.linspace(0, 2*np.pi, 241)
+    cx, cy = 50.0, 50.0
+    rr = _mx(r_centre_m)  # scale by length
+    fig.add_trace(go.Scatter(
+        x=cx + rr*np.cos(t), y=cy + rr*np.sin(t),
+        mode="lines", line=dict(color="#64748b"), hoverinfo="skip", showlegend=False
+    ))
 
-    fig.update_xaxes(range=[0, 100], showgrid=False, zeroline=False)
-    fig.update_yaxes(range=[0, 100], showgrid=False, zeroline=False, scaleanchor="x", scaleratio=1)
-    fig.update_layout(height=520, margin=dict(l=10, r=10, t=10, b=10), clickmode="event+select")
+    # Goal areas (approx spec)
+    small_depth = _mx(4.5)      # ~4.5 m deep
+    small_width = _my(14.0)     # ~14 m wide
+    large_depth = _mx(13.0)     # ~13 m deep
+    large_width = _my(19.0)     # ~19 m wide
+
+    def goal_boxes_left(x0: float):
+        y0 = 50.0 - small_width/2.0
+        y1 = 50.0 + small_width/2.0
+        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x0+small_depth, y1=y1,
+                      line=dict(color="#0f172a", width=2))
+        y0b = 50.0 - large_width/2.0
+        y1b = 50.0 + large_width/2.0
+        fig.add_shape(type="rect", x0=x0, y0=y0b, x1=x0+large_depth, y1=y1b,
+                      line=dict(color="#0f172a"))
+
+    # Left goal
+    goal_boxes_left(0.0)
+    # Right goal (mirror)
+    goal_boxes_left(100.0 - large_depth)
+    fig.add_shape(type="rect",
+                  x0=100.0 - small_depth, y0=50.0 - small_width/2.0,
+                  x1=100.0, y1=50.0 + small_width/2.0,
+                  line=dict(color="#0f172a", width=2))
+
+    # “D” arcs (~20 m radius)
+    r_d = _mx(20.0)
+    th = np.linspace(-np.pi/2, np.pi/2, 121)
+    fig.add_trace(go.Scatter(
+        x=(0 + r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
+        mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False
+    ))
+    fig.add_trace(go.Scatter(
+        x=(100.0 - r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
+        mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False
+    ))
+
+    # Axes/layout
+    fig.update_xaxes(range=[0,100], visible=False, fixedrange=True)
+    fig.update_yaxes(range=[0,100], visible=False, scaleanchor="x", scaleratio=1, fixedrange=True)
+    fig.update_layout(height=540, margin=dict(l=10,r=10,t=10,b=10), dragmode=False, clickmode="event+select")
     return fig
+
+def add_click_mesh(fig: go.Figure, step: float = 2.0) -> None:
+    """Invisible scatter grid so clicks register anywhere."""
+    vs = np.arange(0, 100 + 1e-9, step)
+    xx, yy = np.meshgrid(vs, vs)
+    fig.add_trace(go.Scatter(
+        x=xx.ravel(), y=yy.ravel(),
+        mode="markers",
+        marker=dict(size=18, opacity=0.001),
+        hoverinfo="skip", showlegend=False, name="_clickmesh",
+    ))
 
 # ------------------- UI -------------------
 st.set_page_config(page_title="GAA Event Tracker", layout="wide")
@@ -133,7 +193,7 @@ st.title("GAA Event Tracker — match-by-match")
 
 with st.sidebar:
     st.header("Data")
-    db_path = st.text_input("Database file", DB_PATH_DEFAULT, key="db_path")  # unique key fixes duplicate error
+    db_path = st.text_input("Database file", DB_PATH_DEFAULT, key="db_path")
     if st.button("Initialise / Load schema", key="btn_init_schema"):
         with get_conn(db_path) as c: init_db(c)
         st.success("Database ready.", icon="✅")
@@ -141,11 +201,11 @@ with st.sidebar:
     st.divider(); st.subheader("Setup")
     with st.form("setup_form", clear_on_submit=False):
         m_name = st.text_input("Match name", value="Dublin vs Kerry", key="m_name")
-        m_date = st.text_input("Date (YYYY-MM-DD)", value="2024-08-18", key="m_date")
+        m_date = st.text_input("Date (YYYY-MM-DD)", value="2025-08-10", key="m_date")
         m_comp = st.text_input("Competition", value="All-Ireland", key="m_comp")
         m_venue = st.text_input("Venue", value="Croke Park", key="m_venue")
         t_name = st.text_input("Team", value="Dublin", key="t_name")
-        p_name = st.text_input("Player", value="C. Kilkenny", key="p_name")
+        p_name = st.text_input("Player", value="Player A", key="p_name")
         submitted = st.form_submit_button("Save/Use setup", use_container_width=True)
         if submitted:
             with get_conn(db_path) as c:
@@ -165,10 +225,12 @@ if not ids:
 st.subheader("Pitch (click to add path)")
 
 fig = make_gaa_pitch()
-# The wrapper both renders the chart and captures clicks
-clicks = plotly_events(fig, click_event=True, select_event=False, hover_event=False, key="pitch_clicks")
+add_click_mesh(fig, step=2.0)  # makes the whole canvas clickable
 
-# Keep only two points in session (start, end)
+# IMPORTANT: unique key for the event listener
+clicks = plotly_events(fig, click_event=True, select_event=False, hover_event=False, key="gaa_pitch")
+
+# Keep two points (start, end) in session
 pts = st.session_state.get("pts", [])
 if clicks:
     x = clamp01(clicks[0]["x"]); y = clamp01(clicks[0]["y"])
@@ -207,7 +269,7 @@ else:
     outcome_text = picked
 st.caption(f"Outcome class → {oc}")
 
-# Coordinates (from clicks if available, else manual)
+# Coordinates from clicks (else fall back to numeric)
 if len(pts) >= 1:
     sx, sy = pts[0]
 else:
