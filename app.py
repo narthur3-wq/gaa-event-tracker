@@ -1,6 +1,6 @@
-# app.py — GAA Event Tracker (with WebGL click-mesh + debug)
+# app.py — GAA Event Tracker (Heatmap click-surface + debug)
 # - Session-state click flow (start/end) + arrow annotation
-# - WebGL click mesh so clicks register anywhere (robust)
+# - Heatmap click-surface (robust; no simplification)
 # - Trace inventory + environment panel + raw click dumps
 # - No 150-row limit on events table
 # - SQLite FK on; schema loaded from schema.sql
@@ -49,14 +49,6 @@ def get_phrases():
         for b in ("success","fail","other"):
             out[et][b] = st.session_state.get(f"phr_{et}_{b}", DEFAULT_PHRASES[et][b])
     return out
-
-def map_outcome_to_class(event_type: str, outcome_text: str) -> str:
-    phrases = get_phrases(); o = (outcome_text or "").strip().lower()
-    for bucket in ("success","fail","other"):
-        for p in phrases.get(event_type, {}).get(bucket, []):
-            if p.lower() in o:
-                return bucket
-    return "other"
 
 # ------------------- DB helpers -------------------
 def get_conn(db_path: str):
@@ -117,36 +109,29 @@ def gaa_pitch_figure() -> go.Figure:
     for v in range(10, 100, 10):
         fig.add_shape(type="rect", x0=v-10, y0=0, x1=v, y1=100, line=dict(width=0),
                       fillcolor="#ecfdf5" if (v//10) % 2 else "#d1fae5", layer="below")
-    # Halfway
+    # Halfway + 13/20/45
     fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="#64748b", width=2))
-    # 13/20/45 from both ends
     for m in (13, 20, 45):
         x = _mx(m)
         fig.add_shape(type="line", x0=x, y0=0, x1=x, y1=100, line=dict(color="#94a3b8"))
         fig.add_shape(type="line", x0=100.0 - x, y0=0, x1=100.0 - x, y1=100, line=dict(color="#94a3b8"))
-    # Centre circle (~10 m radius)
+    # Centre circle
     t = np.linspace(0, 2*np.pi, 241); rr = _mx(10.0)
-    fig.add_trace(go.Scatter(
-        x=50.0 + rr*np.cos(t), y=50.0 + rr*np.sin(t),
-        mode="lines", line=dict(color="#64748b"), hoverinfo="skip", showlegend=False
-    ))
-    # Goal areas (approx)
+    fig.add_trace(go.Scatter(x=50.0 + rr*np.cos(t), y=50.0 + rr*np.sin(t),
+                             mode="lines", line=dict(color="#64748b"), hoverinfo="skip", showlegend=False))
+    # Goal areas
     small_depth = _mx(4.5); small_width = _my(14.0)
     large_depth = _mx(13.0); large_width = _my(19.0)
     def goal_boxes_left(x0: float):
         y0 = 50.0 - small_width/2.0; y1 = 50.0 + small_width/2.0
-        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x0+small_depth, y1=y1,
-                      line=dict(color="#0f172a", width=2))
+        fig.add_shape(type="rect", x0=x0, y0=y0, x1=x0+small_depth, y1=y1, line=dict(color="#0f172a", width=2))
         y0b = 50.0 - large_width/2.0; y1b = 50.0 + large_width/2.0
-        fig.add_shape(type="rect", x0=x0, y0=y0b, x1=x0+large_depth, y1=y1b,
-                      line=dict(color="#0f172a"))
+        fig.add_shape(type="rect", x0=x0, y0=y0b, x1=x0+large_depth, y1=y1b, line=dict(color="#0f172a"))
     goal_boxes_left(0.0)
     goal_boxes_left(100.0 - large_depth)
-    fig.add_shape(type="rect",
-                  x0=100.0 - small_depth, y0=50.0 - small_width/2.0,
-                  x1=100.0, y1=50.0 + small_width/2.0,
-                  line=dict(color="#0f172a", width=2))
-    # D arcs (~20 m)
+    fig.add_shape(type="rect", x0=100.0 - small_depth, y0=50.0 - small_width/2.0,
+                  x1=100.0, y1=50.0 + small_width/2.0, line=dict(color="#0f172a", width=2))
+    # D arcs
     r_d = _mx(20.0); th = np.linspace(-np.pi/2, np.pi/2, 121)
     fig.add_trace(go.Scatter(x=(0 + r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
                              mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False))
@@ -155,7 +140,8 @@ def gaa_pitch_figure() -> go.Figure:
     # Axes/layout
     fig.update_xaxes(range=[0,100], visible=False, fixedrange=True)
     fig.update_yaxes(range=[0,100], visible=False, scaleanchor="x", scaleratio=1, fixedrange=True)
-    fig.update_layout(height=540, margin=dict(l=10,r=10,t=10,b=10), dragmode=False, clickmode="event+select")
+    fig.update_layout(height=540, margin=dict(l=10,r=10,t=10,b=10),
+                      dragmode=False, clickmode="event+select", hovermode="closest")
     return fig
 
 def add_arrow(fig: go.Figure, x0, y0, x1, y1, color="#1f77b4", width=3):
@@ -202,31 +188,25 @@ if not ids:
 # ------------------- Pitch (click to add path) -------------------
 st.subheader("Pitch (click to add path)")
 
-# Ensure state keys
 st.session_state.setdefault("start", None)
 st.session_state.setdefault("end", None)
 
 fig = gaa_pitch_figure()
 
-# --- CLICK SURFACE (WebGL), robust vs simplification ---
-def add_click_mesh_gl(fig: go.Figure, step: float = 2.0) -> None:
-    # 0..100 inclusive at chosen step -> e.g., step=2 => 51x51 ~ 2601 points
+# --- CLICK SURFACE: Heatmap (robust vs simplification) ---
+def add_click_heatmap(fig: go.Figure, step: float = 1.0) -> None:
+    # Build 0..100 grid at 'step' increments: e.g., step=1 => 101x101 cells
     n = int(round(100.0 / step))
-    vs = np.linspace(0.0, 100.0, n + 1)
-    xx, yy = np.meshgrid(vs, vs)
-    fig.add_trace(
-        go.Scattergl(
-            x=xx.ravel(),
-            y=yy.ravel(),
-            mode="markers",
-            marker=dict(size=6, opacity=0.02),
-            hoverinfo="skip",
-            name="_MESH_GL",
-            showlegend=False,
-        )
-    )
+    xs = np.linspace(0.0, 100.0, n + 1)
+    ys = np.linspace(0.0, 100.0, n + 1)
+    Z = np.zeros((len(ys), len(xs)), dtype=float)
+    fig.add_trace(go.Heatmap(
+        x=xs, y=ys, z=Z,
+        colorscale=[[0, "rgba(0,0,0,0.0)"], [1, "rgba(0,0,0,0.0)"]],  # fully transparent
+        showscale=False, hoverinfo="skip", name="_HM_CLICK", opacity=0.01
+    ))
 
-add_click_mesh_gl(fig, step=2.0)
+add_click_heatmap(fig, step=1.0)  # dense cell grid to guarantee clicks
 
 # --- DEBUG: trace inventory & environment ---
 info = fig.to_plotly_json()
@@ -238,10 +218,16 @@ st.write([
 ])
 
 st.caption("Debug: figure & environment")
+# For heatmap, 'points' above will be small (x/y vectors), but click coverage = len(x)*len(y)
+hm_cells = 0
+for tr in info.get("data", []):
+    if tr.get("type") == "heatmap":
+        xs, ys = tr.get("x", []) or [], tr.get("y", []) or []
+        hm_cells += (len(xs) * len(ys))
 st.write({
-    "has_click_mesh_points": sum(len(t.get("x", []) or []) for t in info.get("data", [])),
     "num_traces": len(info.get("data", [])),
     "clickmode": info.get("layout", {}).get("clickmode"),
+    "heatmap_cells": hm_cells,  # coverage cells (expect ~10201 at step=1)
 })
 
 # Show selection (optional)
@@ -255,21 +241,21 @@ if st.session_state.end is not None and st.session_state.start is not None:
                    st.session_state.end[0],   st.session_state.end[1])
 
 # Click listeners with fresh keys + raw dumps
-clicks = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="pitch_gl_key_1")
+clicks = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="pitch_hm_key_1")
 st.write("RAW_CLICKS", clicks)
 
-_test_clicks = plotly_events(go.Figure(fig), click_event=True, hover_event=False, select_event=False, key="pitch_gl_key_2")
+_test_clicks = plotly_events(go.Figure(fig), click_event=True, hover_event=False, select_event=False, key="pitch_hm_key_2")
 st.write("TEST_LISTENER", _test_clicks)
 
-# Versions (runtime)
+# Versions (runtime) — don't try to read __version__ from streamlit_plotly_events (module lacks it)
 st.sidebar.write("Versions ⤵")
-for pkg in ["streamlit", "plotly", "streamlit_plotly_events", "pandas", "numpy"]:
+for pkg in ["streamlit", "plotly", "pandas", "numpy"]:
     try:
         st.sidebar.write(pkg, importlib.import_module(pkg).__version__)
     except Exception as e:
         st.sidebar.write(pkg, "not found", e)
 
-# Update state on click (same UX as before)
+# Update state on click
 if clicks:
     last = clicks[-1]
     x = clamp01(float(last.get("x"))); y = clamp01(float(last.get("y")))
