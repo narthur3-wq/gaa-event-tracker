@@ -1,6 +1,6 @@
-# app.py — GAA Event Tracker (with DENSE CLICK-MESH DEBUG)
+# app.py — GAA Event Tracker (with WebGL click-mesh + debug)
 # - Session-state click flow (start/end) + arrow annotation
-# - Dense click mesh so every click hits (for debugging)
+# - WebGL click mesh so clicks register anywhere (robust)
 # - Trace inventory + environment panel + raw click dumps
 # - No 150-row limit on events table
 # - SQLite FK on; schema loaded from schema.sql
@@ -29,17 +29,14 @@ DEFAULT_PHRASES = {
 # ------------------- Helpers -------------------
 def parse_mmss(s: str) -> tuple[int, int]:
     m = re.match(r"^(\d{1,2}):(\d{2})$", (s or "").strip())
-    if not m:
-        return (0, 0)
+    if not m: return (0, 0)
     mm, ss = int(m.group(1)), int(m.group(2))
-    ss = max(0, min(59, ss))
-    mm = max(0, min(45, mm))
+    ss = max(0, min(59, ss)); mm = max(0, min(45, mm))
     return (mm, ss)
 
 def add_seconds(mm: int, ss: int, delta: float) -> tuple[int, int]:
     total = int(round(mm * 60 + ss + delta))
-    if total < 0:
-        total = 0
+    if total < 0: total = 0
     return (total // 60, total % 60)
 
 def clamp01(x: float) -> float:
@@ -47,16 +44,15 @@ def clamp01(x: float) -> float:
 
 def get_phrases():
     out = {}
-    for et in ("carry", "kick", "shot"):
+    for et in ("carry","kick","shot"):
         out[et] = {}
-        for b in ("success", "fail", "other"):
+        for b in ("success","fail","other"):
             out[et][b] = st.session_state.get(f"phr_{et}_{b}", DEFAULT_PHRASES[et][b])
     return out
 
 def map_outcome_to_class(event_type: str, outcome_text: str) -> str:
-    phrases = get_phrases()
-    o = (outcome_text or "").strip().lower()
-    for bucket in ("success", "fail", "other"):
+    phrases = get_phrases(); o = (outcome_text or "").strip().lower()
+    for bucket in ("success","fail","other"):
         for p in phrases.get(event_type, {}).get(bucket, []):
             if p.lower() in o:
                 return bucket
@@ -74,8 +70,7 @@ def init_db(conn: sqlite3.Connection):
     except FileNotFoundError:
         st.error("Schema file 'schema.sql' not found. Add it to your repo root.")
         st.stop()
-    conn.executescript(schema)
-    conn.commit()
+    conn.executescript(schema); conn.commit()
 
 def upsert_team(conn, name: str) -> int:
     cur = conn.cursor()
@@ -92,30 +87,26 @@ def upsert_player(conn, team_id: int, name: str) -> int:
 def insert_match(conn, name: str, date: str, competition: Optional[str], venue: Optional[str]) -> int:
     cur = conn.cursor()
     cur.execute("INSERT INTO match(name,date,competition,venue) VALUES (?,?,?,?)", (name, date, competition, venue))
-    conn.commit()
-    return cur.lastrowid
+    conn.commit(); return cur.lastrowid
 
 def insert_event(conn, **evt) -> int:
     cols = [
-        "match_id", "team_id", "player_id", "event_type",
-        "start_x", "start_y", "end_x", "end_y",
-        "half", "minute", "second", "end_minute", "end_second", "carry_seconds",
-        "outcome", "outcome_class", "notes",
+        "match_id","team_id","player_id","event_type","start_x","start_y","end_x","end_y",
+        "half","minute","second","end_minute","end_second","carry_seconds","outcome","outcome_class","notes"
     ]
     values = [evt.get(c) for c in cols]
     cur = conn.cursor()
     cur.execute(f"INSERT INTO event({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})", values)
-    conn.commit()
-    return cur.lastrowid
+    conn.commit(); return cur.lastrowid
 
 # ------------------- Pitch helpers (GAA look + arrow) -------------------
-PITCH_LEN_M = 140.0  # used for visual scaling only
+PITCH_LEN_M = 140.0
 PITCH_WID_M = 85.0
 
-def _mx(m: float) -> float:
+def _mx(m: float) -> float:  # metres -> % along length
     return 100.0 * float(m) / PITCH_LEN_M
 
-def _my(m: float) -> float:
+def _my(m: float) -> float:  # metres -> % along width
     return 100.0 * float(m) / PITCH_WID_M
 
 def gaa_pitch_figure() -> go.Figure:
@@ -134,8 +125,7 @@ def gaa_pitch_figure() -> go.Figure:
         fig.add_shape(type="line", x0=x, y0=0, x1=x, y1=100, line=dict(color="#94a3b8"))
         fig.add_shape(type="line", x0=100.0 - x, y0=0, x1=100.0 - x, y1=100, line=dict(color="#94a3b8"))
     # Centre circle (~10 m radius)
-    t = np.linspace(0, 2*np.pi, 241)
-    rr = _mx(10.0)
+    t = np.linspace(0, 2*np.pi, 241); rr = _mx(10.0)
     fig.add_trace(go.Scatter(
         x=50.0 + rr*np.cos(t), y=50.0 + rr*np.sin(t),
         mode="lines", line=dict(color="#64748b"), hoverinfo="skip", showlegend=False
@@ -163,10 +153,9 @@ def gaa_pitch_figure() -> go.Figure:
     fig.add_trace(go.Scatter(x=(100.0 - r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
                              mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False))
     # Axes/layout
-    fig.update_xaxes(range=[0, 100], visible=False, fixedrange=True)
-    fig.update_yaxes(range=[0, 100], visible=False, scaleanchor="x", scaleratio=1, fixedrange=True)
-    fig.update_layout(height=540, margin=dict(l=10, r=10, t=10, b=10),
-                      dragmode=False, clickmode="event+select")
+    fig.update_xaxes(range=[0,100], visible=False, fixedrange=True)
+    fig.update_yaxes(range=[0,100], visible=False, scaleanchor="x", scaleratio=1, fixedrange=True)
+    fig.update_layout(height=540, margin=dict(l=10,r=10,t=10,b=10), dragmode=False, clickmode="event+select")
     return fig
 
 def add_arrow(fig: go.Figure, x0, y0, x1, y1, color="#1f77b4", width=3):
@@ -184,8 +173,7 @@ with st.sidebar:
     st.header("Data")
     db_path = st.text_input("Database file", DB_PATH_DEFAULT, key="db_path")
     if st.button("Initialise / Load schema", key="btn_init_schema"):
-        with get_conn(db_path) as c:
-            init_db(c)
+        with get_conn(db_path) as c: init_db(c)
         st.success("Database ready.", icon="✅")
 
     st.divider(); st.subheader("Setup")
@@ -220,34 +208,35 @@ st.session_state.setdefault("end", None)
 
 fig = gaa_pitch_figure()
 
-# --- DENSE, VERY CLICKABLE MESH (TEMP for debugging) ---
-def add_click_mesh(fig: go.Figure, step: float = 1.0) -> None:
-    vs = np.arange(0.0, 100.0 + 1e-9, step)          # 101 x 101 = 10,201 points
+# --- CLICK SURFACE (WebGL), robust vs simplification ---
+def add_click_mesh_gl(fig: go.Figure, step: float = 2.0) -> None:
+    # 0..100 inclusive at chosen step -> e.g., step=2 => 51x51 ~ 2601 points
+    n = int(round(100.0 / step))
+    vs = np.linspace(0.0, 100.0, n + 1)
     xx, yy = np.meshgrid(vs, vs)
-    fig.add_trace(go.Scatter(
-        x=xx.ravel(), y=yy.ravel(),
-        mode="markers",
-        marker=dict(size=36, symbol="square", opacity=0.12),  # slightly visible on purpose
-        hoverinfo="skip", showlegend=False, name="_CLICKMESH_101x101",
-    ))
+    fig.add_trace(
+        go.Scattergl(
+            x=xx.ravel(),
+            y=yy.ravel(),
+            mode="markers",
+            marker=dict(size=6, opacity=0.02),
+            hoverinfo="skip",
+            name="_MESH_GL",
+            showlegend=False,
+        )
+    )
 
-add_click_mesh(fig, step=1.0)
+add_click_mesh_gl(fig, step=2.0)
 
-# --- DEBUG: list every trace & size ---
+# --- DEBUG: trace inventory & environment ---
 info = fig.to_plotly_json()
 st.caption("Debug: traces present")
-trace_summary = []
-for i, tr in enumerate(info.get("data", [])):
-    trace_summary.append({
-        "i": i,
-        "type": tr.get("type"),
-        "name": tr.get("name"),
-        "points": len(tr.get("x", []) or []),
-        "mode": tr.get("mode"),
-    })
-st.write(trace_summary)
+st.write([
+    {"i": i, "type": tr.get("type"), "name": tr.get("name"),
+     "points": len(tr.get("x", []) or []), "mode": tr.get("mode")}
+    for i, tr in enumerate(info.get("data", []))
+])
 
-# --- DEBUG: figure & environment summary ---
 st.caption("Debug: figure & environment")
 st.write({
     "has_click_mesh_points": sum(len(t.get("x", []) or []) for t in info.get("data", [])),
@@ -255,7 +244,7 @@ st.write({
     "clickmode": info.get("layout", {}).get("clickmode"),
 })
 
-# Show selection (optional; also adds a visible scatter after first click)
+# Show selection (optional)
 if st.session_state.start is not None:
     fig.add_trace(go.Scatter(
         x=[st.session_state.start[0]], y=[st.session_state.start[1]],
@@ -265,11 +254,11 @@ if st.session_state.end is not None and st.session_state.start is not None:
     add_arrow(fig, st.session_state.start[0], st.session_state.start[1],
                    st.session_state.end[0],   st.session_state.end[1])
 
-# Click listeners (fresh keys) + raw dumps
-clicks = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="pitch_debug_key_3")
+# Click listeners with fresh keys + raw dumps
+clicks = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="pitch_gl_key_1")
 st.write("RAW_CLICKS", clicks)
 
-_test_clicks = plotly_events(go.Figure(fig), click_event=True, hover_event=False, select_event=False, key="pitch_debug_key_4")
+_test_clicks = plotly_events(go.Figure(fig), click_event=True, hover_event=False, select_event=False, key="pitch_gl_key_2")
 st.write("TEST_LISTENER", _test_clicks)
 
 # Versions (runtime)
@@ -280,11 +269,10 @@ for pkg in ["streamlit", "plotly", "streamlit_plotly_events", "pandas", "numpy"]
     except Exception as e:
         st.sidebar.write(pkg, "not found", e)
 
-# Update state on click (same UX as your older version)
+# Update state on click (same UX as before)
 if clicks:
     last = clicks[-1]
-    x = clamp01(float(last.get("x")))
-    y = clamp01(float(last.get("y")))
+    x = clamp01(float(last.get("x"))); y = clamp01(float(last.get("y")))
     if st.session_state.start is None:
         st.session_state.start = (x, y)
     elif st.session_state.end is None:
