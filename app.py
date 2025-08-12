@@ -1,4 +1,9 @@
-# app.py — GAA Event Tracker (updated: stronger click mesh, no row limit)
+# app.py — GAA Event Tracker (final)
+# - Session-state click flow (start/end)
+# - Arrow drawn with Plotly annotations
+# - Invisible click mesh to guarantee click capture anywhere
+# - No 150-row limit on the events table
+# - SQLite FK on; schema loaded from schema.sql (must exist)
 
 import io
 import re
@@ -93,7 +98,7 @@ def insert_event(conn, **evt) -> int:
     cur.execute(f"INSERT INTO event({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})", values)
     conn.commit(); return cur.lastrowid
 
-# ------------------- Pitch helpers (GAA look + click mesh) -------------------
+# ------------------- Pitch helpers (GAA look + click mesh + arrow) -------------------
 PITCH_LEN_M = 140.0   # 130–145 m
 PITCH_WID_M = 85.0    # 80–90  m
 
@@ -103,90 +108,75 @@ def _mx(m: float) -> float:  # metres -> % along length (x axis 0..100)
 def _my(m: float) -> float:  # metres -> % along width  (y axis 0..100)
     return 100.0 * float(m) / PITCH_WID_M
 
-def make_gaa_pitch() -> go.Figure:
+def gaa_pitch_figure() -> go.Figure:
     fig = go.Figure()
-
     # Grass (with mowing stripes)
     fig.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100,
                   line=dict(color="#14532d", width=2), fillcolor="#d1fae5")
     for v in range(10, 100, 10):
         fig.add_shape(type="rect", x0=v-10, y0=0, x1=v, y1=100, line=dict(width=0),
                       fillcolor="#ecfdf5" if (v//10) % 2 else "#d1fae5", layer="below")
-
     # Halfway
     fig.add_shape(type="line", x0=50, y0=0, x1=50, y1=100, line=dict(color="#64748b", width=2))
-
-    # 13 / 20 / 45 from both ends
+    # 13/20/45 from both ends
     for m in (13, 20, 45):
         x = _mx(m)
         fig.add_shape(type="line", x0=x, y0=0, x1=x, y1=100, line=dict(color="#94a3b8"))
         fig.add_shape(type="line", x0=100.0 - x, y0=0, x1=100.0 - x, y1=100, line=dict(color="#94a3b8"))
-
     # Centre circle (~10 m radius)
     r_centre_m = 10.0
     t = np.linspace(0, 2*np.pi, 241)
     cx, cy = 50.0, 50.0
-    rr = _mx(r_centre_m)  # scale by length
+    rr = _mx(r_centre_m)
     fig.add_trace(go.Scatter(
         x=cx + rr*np.cos(t), y=cy + rr*np.sin(t),
         mode="lines", line=dict(color="#64748b"), hoverinfo="skip", showlegend=False
     ))
-
-    # Goal areas (approx spec)
-    small_depth = _mx(4.5)      # ~4.5 m deep
-    small_width = _my(14.0)     # ~14 m wide
-    large_depth = _mx(13.0)     # ~13 m deep
-    large_width = _my(19.0)     # ~19 m wide
-
+    # Goal areas
+    small_depth = _mx(4.5); small_width = _my(14.0)
+    large_depth = _mx(13.0); large_width = _my(19.0)
     def goal_boxes_left(x0: float):
-        y0 = 50.0 - small_width/2.0
-        y1 = 50.0 + small_width/2.0
+        y0 = 50.0 - small_width/2.0; y1 = 50.0 + small_width/2.0
         fig.add_shape(type="rect", x0=x0, y0=y0, x1=x0+small_depth, y1=y1,
                       line=dict(color="#0f172a", width=2))
-        y0b = 50.0 - large_width/2.0
-        y1b = 50.0 + large_width/2.0
+        y0b = 50.0 - large_width/2.0; y1b = 50.0 + large_width/2.0
         fig.add_shape(type="rect", x0=x0, y0=y0b, x1=x0+large_depth, y1=y1b,
                       line=dict(color="#0f172a"))
-
-    # Left goal
     goal_boxes_left(0.0)
-    # Right goal (mirror)
     goal_boxes_left(100.0 - large_depth)
     fig.add_shape(type="rect",
                   x0=100.0 - small_depth, y0=50.0 - small_width/2.0,
                   x1=100.0, y1=50.0 + small_width/2.0,
                   line=dict(color="#0f172a", width=2))
-
-    # “D” arcs (~20 m radius)
-    r_d = _mx(20.0)
-    th = np.linspace(-np.pi/2, np.pi/2, 121)
-    fig.add_trace(go.Scatter(
-        x=(0 + r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
-        mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False
-    ))
-    fig.add_trace(go.Scatter(
-        x=(100.0 - r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
-        mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False
-    ))
-
+    # D arcs (~20 m radius)
+    r_d = _mx(20.0); th = np.linspace(-np.pi/2, np.pi/2, 121)
+    fig.add_trace(go.Scatter(x=(0 + r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
+                             mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(x=(100.0 - r_d*np.cos(th)), y=(50.0 + r_d*np.sin(th)),
+                             mode="lines", line=dict(color="#94a3b8"), hoverinfo="skip", showlegend=False))
     # Axes/layout
     fig.update_xaxes(range=[0,100], visible=False, fixedrange=True)
     fig.update_yaxes(range=[0,100], visible=False, scaleanchor="x", scaleratio=1, fixedrange=True)
     fig.update_layout(height=540, margin=dict(l=10,r=10,t=10,b=10), dragmode=False, clickmode="event+select")
     return fig
 
+# Invisible scatter grid so clicks work even on an empty pitch
 def add_click_mesh(fig: go.Figure, step: float = 2.0) -> None:
-    """Invisible scatter grid so clicks register anywhere.
-    Uses square markers + slight opacity for reliable hit-testing.
-    """
     vs = np.arange(0, 100 + 1e-9, step)
     xx, yy = np.meshgrid(vs, vs)
     fig.add_trace(go.Scatter(
-        x=xx.ravel(), y=yy.ravel(),
-        mode="markers",
+        x=xx.ravel(), y=yy.ravel(), mode="markers",
         marker=dict(size=26, symbol="square", opacity=0.03),
         hoverinfo="skip", showlegend=False, name="_clickmesh",
     ))
+
+# Arrow via annotation (axis-aware)
+def add_arrow(fig: go.Figure, x0, y0, x1, y1, color="#1f77b4", width=3):
+    fig.add_annotation(
+        x=x1, y=y1, ax=x0, ay=y0,
+        xref="x", yref="y", axref="x", ayref="y",
+        showarrow=True, arrowhead=3, arrowsize=1.5, arrowwidth=width, arrowcolor=color,
+    )
 
 # ------------------- UI -------------------
 st.set_page_config(page_title="GAA Event Tracker", layout="wide")
@@ -225,23 +215,41 @@ if not ids:
 # ------------------- Pitch (click to add path) -------------------
 st.subheader("Pitch (click to add path)")
 
-fig = make_gaa_pitch()
-add_click_mesh(fig, step=2.0)  # makes the whole canvas clickable
+# Ensure state keys exist
+st.session_state.setdefault("start", None)
+st.session_state.setdefault("end", None)
 
-# Unique key for event listener
-clicks = plotly_events(fig, click_event=True, select_event=False, hover_event=False, key="gaa_pitch")
+fig = gaa_pitch_figure()
+add_click_mesh(fig, step=2.0)  # whole canvas is clickable
 
-# Keep two points (start, end) in session
-pts = st.session_state.get("pts", [])
+# Show current selection
+if st.session_state.start is not None:
+    fig.add_trace(go.Scatter(x=[st.session_state.start[0]], y=[st.session_state.start[1]],
+                             mode="markers", marker=dict(size=10, color="#1f77b4"), name="start"))
+if st.session_state.end is not None and st.session_state.start is not None:
+    add_arrow(fig, st.session_state.start[0], st.session_state.start[1],
+                   st.session_state.end[0],   st.session_state.end[1])
+
+# Capture clicks
+clicks = plotly_events(fig, click_event=True, hover_event=False, select_event=False, key="pitch")
 if clicks:
-    x = clamp01(clicks[0]["x"]); y = clamp01(clicks[0]["y"])
-    if len(pts) >= 2: pts = []
-    pts.append((x, y))
-    st.session_state["pts"] = pts
+    last = clicks[-1]
+    x = clamp01(float(last.get("x")))
+    y = clamp01(float(last.get("y")))
+    if st.session_state.start is None:
+        st.session_state.start = (x, y)
+    elif st.session_state.end is None:
+        st.session_state.end = (x, y)
+    else:
+        st.session_state.start = (x, y)
+        st.session_state.end = None
+    st.rerun()  # mirror the older, snappy UX
 
-col1, col2 = st.columns(2)
-with col1: st.write("Start:", pts[0] if len(pts) >= 1 else (None, None))
-with col2: st.write("End:",   pts[1] if len(pts) >= 2 else (None, None))
+# Clear selection
+if st.button("Clear selection", key="clear_sel"):
+    st.session_state.start = None
+    st.session_state.end = None
+    st.rerun()
 
 # ------------------- Event entry -------------------
 st.subheader("Add Event")
@@ -270,14 +278,14 @@ else:
     outcome_text = picked
 st.caption(f"Outcome class → {oc}")
 
-# Coordinates from clicks (else fall back to numeric)
-if len(pts) >= 1:
-    sx, sy = pts[0]
+# Coordinates from clicks (fallback to numeric if not set)
+if st.session_state.start is not None:
+    sx, sy = st.session_state.start
 else:
     sx = st.number_input("start_x", 0.0, 100.0, 10.0, key="start_x")
     sy = st.number_input("start_y", 0.0, 100.0, 50.0, key="start_y")
-if len(pts) >= 2:
-    ex, ey = pts[1]
+if st.session_state.end is not None:
+    ex, ey = st.session_state.end
 else:
     ex = st.number_input("end_x",   0.0, 100.0, 30.0, key="end_x")
     ey = st.number_input("end_y",   0.0, 100.0, 55.0, key="end_y")
@@ -300,9 +308,12 @@ if st.button("Save event", key="save_event"):
             outcome=outcome_text, outcome_class=oc, notes=None,
         )
     st.success("Event saved.", icon="✅")
-    st.session_state["pts"] = []
+    # Reset selection for next event
+    st.session_state.start = None
+    st.session_state.end = None
+    st.rerun()
 
-# ------------------- Recent events table -------------------
+# ------------------- Recent events table (no limit) -------------------
 with get_conn(DB_PATH_DEFAULT) as c:
     df = pd.read_sql_query(
         "SELECT event_id, half, minute, second, event_type, outcome, outcome_class, start_x, start_y, end_x, end_y "
@@ -326,5 +337,5 @@ with colx:
 with coly:
     if st.button("Export pitch PNG", key="export_png"):
         buf = io.BytesIO()
-        make_gaa_pitch().write_image(buf, format="png", engine="kaleido", scale=2)
+        gaa_pitch_figure().write_image(buf, format="png", engine="kaleido", scale=2)
         st.download_button("Download PNG", data=buf.getvalue(), file_name="pitch.png", mime="image/png", key="download_png_btn")
