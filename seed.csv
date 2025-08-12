@@ -1,0 +1,11 @@
+match,date,competition,venue,team,player,event_type,start_x,start_y,end_x,end_y,half,minute,second,carry_seconds,outcome
+Dubs vs Kerry 2025-08-10,2025-08-10,All-Ireland,Croke Park,Dublin,Player A,carry,10,55,28,60,1,3,12,3.2,success
+Dubs vs Kerry 2025-08-10,2025-08-10,All-Ireland,Croke Park,Dublin,Player B,carry,35,45,50,48,1,16,40,,turnover
+Dubs vs Kerry 2025-08-10,2025-08-10,All-Ireland,Croke Park,Dublin,Player C,kick,52,55,72,58,2,39,20,,completed
+Dubs vs Kerry 2025-08-10,2025-08-10,All-Ireland,Croke Park,Kerry,Player D,kick,70,40,88,35,2,44,3,,intercepted
+Dubs vs Kerry 2025-08-10,2025-08-10,All-Ireland,Croke Park,Dublin,Striker,shot,88,50,100,50,2,55,33,,goal
+Mayo vs Tyrone 2025-08-05,2025-08-05,All-Ireland,McHale Park,Mayo,Runner,carry,22,60,40,62,1,8,15,5.0,success
+Mayo vs Tyrone 2025-08-05,2025-08-05,All-Ireland,McHale Park,Mayo,Playmaker,kick,40,50,60,52,1,22,10,,received
+Mayo vs Tyrone 2025-08-05,2025-08-05,All-Ireland,McHale Park,Tyrone,Wing,shot,78,30,100,45,1,27,2,,short
+Mayo vs Tyrone 2025-08-05,2025-08-05,All-Ireland,McHale Park,Mayo,Mid,shot,70,60,100,80,2,63,19,,point
+Mayo vs Tyrone 2025-08-05,2025-08-05,All-Ireland,McHale Park,Tyrone,Full Fwd,shot,60,45,100,52,2,65,2,,post
